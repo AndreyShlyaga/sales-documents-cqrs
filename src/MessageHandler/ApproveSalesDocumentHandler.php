@@ -8,7 +8,7 @@ use App\Entity\SalesDocument;
 use App\Enum\SalesDocumentStatus;
 use App\Enum\SalesDocumentType;
 use App\Message\Command\ApproveSalesDocument;
-use App\Notification\NotifierPort;
+use App\Notification\ApprovalNotifier;
 use App\Repository\SalesDocumentRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Messenger\Attribute\AsMessageHandler;
@@ -19,13 +19,13 @@ final class ApproveSalesDocumentHandler
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
         private readonly SalesDocumentRepository $repository,
-        private readonly NotifierPort $notifier,
+        private readonly ApprovalNotifier $approvalNotifier,
     ) {
     }
 
     public function __invoke(ApproveSalesDocument $command): int
     {
-        $approvedId = $this->entityManager->wrapInTransaction(function () use ($command) {
+        $approvedDocument = $this->entityManager->wrapInTransaction(function () use ($command): SalesDocument {
             $document = $this->repository->find($command->documentId);
             if ($document === null) {
                 throw new \RuntimeException("Document {$command->documentId} not found");
@@ -39,38 +39,27 @@ final class ApproveSalesDocumentHandler
             $document->setApprovedAt(new \DateTimeImmutable());
             $document->setSellerSnapshot($this->buildSellerSnapshot($document));
 
-            $approvedId = $document->getId();
-
-            if ($document->getType() === SalesDocumentType::Quote) {
-                $order = new SalesDocument();
-                $order->setContractorId($document->getContractorId());
-                $order->setCreatedBy($command->approvedBy);
-                $order->setType(SalesDocumentType::Order);
-                $order->setStatus(SalesDocumentStatus::Approved);
-                $order->setApprovedBy($command->approvedBy);
-                $order->setApprovedAt(new \DateTimeImmutable());
-                $order->setParentQuoteId($document->getId());
-                $order->setSellerSnapshot($document->getSellerSnapshot());
-                $this->entityManager->persist($order);
-                $this->entityManager->flush();
-                $approvedId = $order->getId();
+            if ($document->getType() !== SalesDocumentType::Quote) {
+                return $document;
             }
 
-            return $approvedId;
+            $order = new SalesDocument();
+            $order->setContractorId($document->getContractorId());
+            $order->setCreatedBy($command->approvedBy);
+            $order->setType(SalesDocumentType::Order);
+            $order->setStatus(SalesDocumentStatus::Approved);
+            $order->setApprovedBy($command->approvedBy);
+            $order->setApprovedAt(new \DateTimeImmutable());
+            $order->setParentQuoteId($document->getId());
+            $order->setSellerSnapshot($document->getSellerSnapshot());
+            $this->entityManager->persist($order);
+
+            return $order;
         });
 
-        $approvedDocument = $this->repository->find($approvedId);
+        $this->approvalNotifier->documentApproved($approvedDocument);
 
-        $this->notifier->notify(
-            $approvedDocument->getCreatedBy(),
-            "Document #{$approvedDocument->getId()} has been approved",
-        );
-        $this->notifier->notify(
-            $approvedDocument->getContractorId(),
-            "Document #{$approvedDocument->getId()} has been approved",
-        );
-
-        return $approvedId;
+        return $approvedDocument->getId();
     }
 
     /**
