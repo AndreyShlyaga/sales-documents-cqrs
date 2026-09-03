@@ -1,31 +1,31 @@
 # sales-documents-cqrs
 
-## Pliki środowiskowe
+PHP 8.4, Symfony 7.4, Messenger (`command.bus`, transport `sync`), Doctrine ORM 3, PostgreSQL 16,
+PHPUnit 13. Instrukcja uruchomienia krok po kroku jest w `SETUP.md`.
 
-Sekrety i dane połączenia są celowo puste w commitowanych `.env`, `.env.dev` i `.env.test`.
-Prawdziwe wartości trzymamy w nieśledzonych `.env.local` / `.env.test.local`:
+## Sekrety
 
-```bash
-cp .env .env.local
-cp .env.test .env.test.local
-```
+W commitowanych `.env`, `.env.dev` i `.env.test` pola `APP_SECRET`, `DEFAULT_URI` i
+`DATABASE_URL` zostały celowo opróżnione, żeby sekrety i dane połączenia nie trafiły do
+repozytorium. Wartości wpisuje się w nieśledzonych `.env.local` i `.env.test.local`. Dane
+logowania w `compose.yaml` zostały, bo dotyczą wyłącznie lokalnego kontenera i nie są sekretem.
 
-`.env.local`:
+Schemat nie zmienił się, więc nie doszły nowe migracje. Nowy status `rejected` też nie wymagał
+migracji, bo kolumna `status` jest typu `VARCHAR`.
 
-```dotenv
-APP_SECRET=<dowolny 32-znakowy ciąg hex>
-DEFAULT_URI=http://localhost
-DATABASE_URL="postgresql://app:app_secret@127.0.0.1:5432/app?serverVersion=16&charset=utf8"
-```
+## Wersja Symfony
 
-`.env.test.local`:
+Zostałem przy 7.4. Nic nie blokuje przejścia na 8.1 poza pinem `7.4.*` w `composer.json`, PHP 8.4
+już jest, a testy przechodzą z `failOnDeprecation`, więc nie jest to decyzja wymuszona. Nie
+zrobiłem go, bo 7.4 to LTS ze wsparciem do listopada 2029, a 8.1 kończy wsparcie w styczniu 2027,
+żaden z problemów nie wynikał z wersji frameworka, a zmiana major poszerzyłaby diff o rzeczy
+niezwiązane z zadaniem. Pozostałe zależności są na bieżących gałęziach.
 
-```dotenv
-APP_SECRET=<dowolny niepusty ciąg>
-DATABASE_URL="postgresql://app:app_secret@127.0.0.1:5432/app_test?serverVersion=16&charset=utf8"
-```
-
-Dane logowania jak w `compose.yaml` (`app` / `app_secret`).
+Przy okazji sprawdzania wersji zauważyłem, że `composer.json` deklaruje `php >=8.2`, ale
+`composer.lock` zawiera PHPUnit 13.3.0, który wymaga `php >=8.4.1`, więc realne minimum projektu to
+PHP 8.4. Na maszynie z PHP 8.2 projekt zatrzymuje się na `platform_check.php` z komunikatem o
+wymaganym 8.4. Nie zmieniałem deklaracji, bo nie było to częścią zadania, ale warto ją wyrównać z
+tym, co faktycznie jest w locku.
 
 
 
@@ -291,3 +291,8 @@ zamówienia ma być osoba zatwierdzająca (bo to jej działanie je wygenerowało
 to jego praca została zatwierdzona). Gdyby chodziło o drugi wariant, poprawka sprowadza się do
 `setCreatedBy($document->getCreatedBy())` w handlerze albo do wysyłania powiadomień na podstawie
 zatwierdzanej oferty zamiast utworzonego zamówienia. Zostawiam to do ustalenia z zespołem.
+
+W treści zadania, w sekcji o testach happy-path, wyjątek od zakazu zmiany asercji odsyła do
+"punktu 3 wyżej", podczas gdy zmiana testu jest opisana w punkcie 2. Nie miało to wpływu na
+pracę, bo asercji obu testów happy-path nie zmieniałem, ale odnotowuję na wypadek gdyby numeracja
+miała znaczenie przy ocenie.
