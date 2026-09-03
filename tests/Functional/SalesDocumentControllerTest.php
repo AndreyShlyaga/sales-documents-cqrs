@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Functional;
 
 use App\Entity\SalesDocument;
+use App\Repository\SalesDocumentRepository;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 
@@ -17,6 +18,7 @@ use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
  * 2. Approving an unknown document id is a client error, answered with 404 and a stable error code.
  * 3. Approving a document that is no longer a draft conflicts with its state, answered with 409
  *    and a stable error code.
+ * 4. A document created over HTTP stores contractor and creator exactly as sent, never swapped.
  */
 final class SalesDocumentControllerTest extends WebTestCase
 {
@@ -81,5 +83,20 @@ final class SalesDocumentControllerTest extends WebTestCase
 
         $body = json_decode($this->client->getResponse()->getContent(), true);
         self::assertSame('sales_document_status_conflict', $body['error']);
+    }
+
+    public function testCreatingThroughHttpStoresContractorAndCreatorAsSent(): void
+    {
+        $this->client->request('POST', '/sales-documents', server: ['CONTENT_TYPE' => 'application/json'], content: json_encode([
+            'contractor_id' => 77,
+            'created_by' => 5,
+        ]));
+        self::assertResponseStatusCodeSame(201);
+        $id = json_decode($this->client->getResponse()->getContent(), true)['id'];
+
+        $document = self::getContainer()->get(SalesDocumentRepository::class)->find($id);
+
+        self::assertSame(77, $document->getContractorId(), 'contractor_id from the payload must land in contractorId');
+        self::assertSame(5, $document->getCreatedBy(), 'created_by from the payload must land in createdBy');
     }
 }

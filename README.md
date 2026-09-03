@@ -166,6 +166,62 @@ się wyłącznie przyjęciem żądania i zwróceniem odpowiedzi.
 
 
 
+## Problem 3. Zamienione dane właściciela w części nowych dokumentów
+
+### Jakim tropem poszedłem
+
+Zgłoszenie supportu nie wskazywało miejsca w kodzie, ale zawierało trzy podpowiedzi i każda z
+nich zawężała poszukiwania. Nie sięgałem po Xdebug, bo sam tekst zgłoszenia doprowadził mnie do
+przyczyny w trzech krokach czytania kodu.
+
+Pierwsza podpowiedź to "nowo utworzonych dokumentów". Skoro chodzi o nowe dokumenty, problem leży
+na ścieżce tworzenia, a nie zatwierdzania. Dokumenty tworzy wyłącznie `CreateSalesDocumentHandler`.
+Sprawdziłem go i okazał się czysty, bo bierze `contractorId` i `createdBy` z komendy i zapisuje je
+bez żadnej zamiany. Skoro handler jest czysty, a dane lądują zamienione, to muszą być zamienione
+jeszcze zanim komenda do niego trafi.
+
+Druga podpowiedź to "nie za każdym razem". Skoro nie zawsze, to muszą istnieć co najmniej dwie
+ścieżki tworzenia i tylko jedna z nich jest zepsuta. Poszukałem, kto buduje `CreateSalesDocument`.
+Są dwa miejsca. Testy budują komendę samodzielnie i wysyłają ją prosto do szyny, a
+`SalesDocumentController::create()` buduje ją z ciała żądania HTTP.
+
+Trzecia podpowiedź to "nie widać tego w żadnym z testów". Teraz było jasne dlaczego. Testy
+handlerów omijają kontroler, więc idą zdrową ścieżką. Jedyny test przez HTTP sprawdzał tylko
+`type` i `parent_quote_id`, właściciela nie dotykał. Zepsuta ścieżka to więc kontroler.
+
+W `create()` dane z żądania nie szły prosto do komendy, tylko przez prywatną metodę
+`resolveDocumentOwnership()`, która zwracała `contractorId` z klucza `created_by` i `createdBy` z
+klucza `contractor_id`. Klucze były zamienione miejscami. Nazwa metody sugerowała jakąś logikę
+ustalania właściciela, a w środku było tylko przełożenie dwóch wartości, i właśnie ta nazwa
+pozwoliła błędowi przejść przez przegląd kodu. Oba pola są typu `int`, więc typy też niczego nie
+wychwyciły.
+
+### Jak to potwierdziłem
+
+Hipotezę sprawdziłem żądaniem, a nie tylko czytaniem kodu. Wysłałem przez `curl` dokument z
+`contractor_id` równym 10 i `created_by` równym 77, a potem odczytałem wiersz z bazy. W tabeli
+`contractor_id` miał wartość 77, a `created_by` wartość 10, czyli dokładnie odwrotnie niż w
+żądaniu.
+
+Zanim cokolwiek poprawiłem, napisałem test
+`testCreatingThroughHttpStoresContractorAndCreatorAsSent`. Tworzy dokument przez HTTP z różnymi
+wartościami obu pól, odczytuje encję przez repozytorium i sprawdza każde pole osobno. Wartości
+muszą być różne, bo przy identycznych zamiana byłaby niewidoczna. Test uruchomiony na niezmienionym
+kodzie upadł z komunikatem, że oczekiwano 77, a otrzymano 5.
+
+### Jak zostało rozwiązane
+
+Usunąłem `resolveDocumentOwnership()` w całości i przekazuję pola z żądania prosto do komendy, bo
+metoda nie miała żadnej logiki poza zamianą kluczy i nie było czego w niej poprawiać. Po tej
+zmianie test przeszedł, a ten sam `curl` co wcześniej zapisał w bazie `contractor_id` równe 10 i
+`created_by` równe 77, czyli tak jak w żądaniu. Cały zestaw testów pozostał zielony poza dwoma
+testami dla `RejectSalesDocument`, którego jeszcze nie było.
+
+Xdebug byłby potrzebny, gdyby wartość ulegała zniekształceniu tam, gdzie nie ma jawnego kodu, na
+przykład w listenerze Doctrine albo w mapowaniu. Tutaj zgłoszenie doprowadziło do jawnego kodu w
+kontrolerze, więc debugger nie był potrzebny. Gdyby kontroler okazał się czysty, kolejnym krokiem
+byłoby właśnie prześledzenie w debuggerze drogi od ciała żądania przez komendę i encję do zapisu.
+
 ## Spostrzeżenia poza zakresem zadania
 
 Zamówienie tworzone przy zatwierdzaniu oferty dostaje w `createdBy` identyfikator osoby
