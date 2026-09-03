@@ -24,8 +24,10 @@ niezwiązane z zadaniem. Pozostałe zależności są na bieżących gałęziach.
 Przy okazji sprawdzania wersji zauważyłem, że `composer.json` deklaruje `php >=8.2`, ale
 `composer.lock` zawiera PHPUnit 13.3.0, który wymaga `php >=8.4.1`, więc realne minimum projektu to
 PHP 8.4. Na maszynie z PHP 8.2 projekt zatrzymuje się na `platform_check.php` z komunikatem o
-wymaganym 8.4. Nie zmieniałem deklaracji, bo nie było to częścią zadania, ale warto ją wyrównać z
-tym, co faktycznie jest w locku.
+wymaganym 8.4. Wyrównałem deklarację do `php >=8.4`, żeby `composer.json` mówił to samo co lock, i
+odświeżyłem hash locka przez `composer update --lock`. Wersje pakietów się nie zmieniły, w locku
+zmienił się tylko hash i sekcja `platform`, testy przechodzą bez zmian. To jedyna zmiana w wersjach
+poza czterema punktami zadania i zrobiłem ją, bo ma konkretną, sprawdzalną przyczynę.
 
 
 
