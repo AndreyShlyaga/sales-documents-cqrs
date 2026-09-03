@@ -22,6 +22,15 @@ final class SalesDocumentStatusConflict extends SalesDocumentException
         ));
     }
 
+    public static function cannotReject(int $documentId, SalesDocumentStatus $current): self
+    {
+        return new self(\sprintf(
+            'Sales document %d cannot be rejected while it is %s.',
+            $documentId,
+            $current->value,
+        ));
+    }
+
     public function errorCode(): string
     {
         return 'sales_document_status_conflict';

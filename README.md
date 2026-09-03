@@ -222,6 +222,62 @@ przykład w listenerze Doctrine albo w mapowaniu. Tutaj zgłoszenie doprowadził
 kontrolerze, więc debugger nie był potrzebny. Gdyby kontroler okazał się czysty, kolejnym krokiem
 byłoby właśnie prześledzenie w debuggerze drogi od ciała żądania przez komendę i encję do zapisu.
 
+
+
+
+## Problem 4. Nowa operacja RejectSalesDocument
+
+### Co wynika z testu
+
+Jedynym źródłem wymagań był `RejectSalesDocumentHandlerTest`, więc najpierw wyciągnąłem z niego
+kontrakt. Komenda `RejectSalesDocument` leży w `App\Message\Command` i przyjmuje nazwane argumenty
+`documentId` oraz `rejectedBy`, bo tak buduje ją test i nazw parametrów nie da się zmienić.
+W enumie `SalesDocumentStatus` musi istnieć przypadek `Rejected`, bo test porównuje z nim status
+po operacji. Odrzucenie dokumentu, który nie jest szkicem, ma rzucić `\RuntimeException` albo jego
+podklasę. Handler może nie zwracać niczego, bo test czyta wynik przez `?->getResult()`, w
+odróżnieniu od testu zatwierdzania, który używa zwykłego `->getResult()`.
+
+### Jak zostało zrobione
+
+Komenda jest lustrzanym odbiciem `ApproveSalesDocument`, czyli klasą `final` z dwoma polami
+`public readonly` i bez logiki. Do enuma doszedł przypadek `Rejected` o wartości `rejected`.
+Kolumna `status` jest typu `VARCHAR`, więc nowy przypadek nie wymaga migracji, co potwierdziłem
+przez `doctrine:schema:validate`.
+
+`RejectSalesDocumentHandler` jest zarejestrowany na `command.bus` tak samo jak pozostałe handlery.
+Szuka dokumentu przez repozytorium, dla brakującego rzuca `SalesDocumentNotFound`, dla dokumentu w
+statusie innym niż `draft` rzuca `SalesDocumentStatusConflict::cannotReject`, a dla szkicu ustawia
+status `Rejected` i zapisuje. Oba wyjątki dziedziczą po `\RuntimeException`, więc test oczekujący
+tego typu przechodzi bez żadnej specjalnej obsługi. Dzięki temu samemu subskrybentowi co przy
+zatwierdzaniu odrzucenie przez HTTP odpowiadałoby 404 i 409 bez dodatkowego kodu, gdyby endpoint
+kiedyś powstał.
+
+Handler zwraca `void`, bo odrzucenie niczego nie tworzy i nie ma identyfikatora do oddania, a
+test wprost dopuszcza brak wyniku. Nie używa też `wrapInTransaction`, bo zatwierdzanie potrzebuje
+transakcji do zapisania dwóch encji naraz, a odrzucenie zmienia jeden wiersz i pojedynczy `flush()`
+jest już w Doctrine atomowy.
+
+### Rozważany wariant, z którego świadomie zrezygnowałem
+
+Zatwierdzanie zapisuje kto i kiedy zatwierdził, w polach `approvedBy` i `approvedAt`. Operacja w
+tym samym stylu powinna zapisywać `rejectedBy` i `rejectedAt`, tym bardziej że komenda już
+przyjmuje `rejectedBy`. Rozważałem dodanie tych dwóch pól do encji razem z migracją i uważam, że
+w prawdziwym projekcie tak bym to zrobił, bo komenda, która przyjmuje parametr i go wyrzuca,
+wygląda na niedokończoną.
+
+Zostałem jednak przy samym statusie, bo zadanie mówi wprost, żeby zaprojektować kod na podstawie
+samego testu, a test sprawdza wyłącznie status. Dwie kolumny i migracja pod coś, czego żaden test
+nie weryfikuje, byłyby wyjściem poza wymagania. W handlerze zostawiłem komentarz, że `rejectedBy`
+jest przyjmowane, ale nie zapisywane, żeby nikt nie wziął tego za przeoczenie. Dodanie tych pól to
+jedna migracja i dwie linie w handlerze, gdyby zespół uznał, że są potrzebne.
+
+Z tego samego powodu nie ma endpointu HTTP dla odrzucania ani powiadomień po odrzuceniu. Test jest
+testem handlera, a nie kontrolera, i nie mówi nic o efektach ubocznych.
+
+
+
+
+
 ## Spostrzeżenia poza zakresem zadania
 
 Zamówienie tworzone przy zatwierdzaniu oferty dostaje w `createdBy` identyfikator osoby
