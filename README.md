@@ -27,6 +27,9 @@ DATABASE_URL="postgresql://app:app_secret@127.0.0.1:5432/app_test?serverVersion=
 
 Dane logowania jak w `compose.yaml` (`app` / `app_secret`).
 
+
+
+
 ## Problem 1. Zatwierdzenie zgłaszane jako nieudane, mimo że się powiodło
 
 ### Przyczyna
@@ -95,6 +98,73 @@ Samo `try/catch` bez logowania też załatwiłoby test, ale wprowadziłoby drugi
 pierwszego, bo powiadomienia ginęłyby po cichu i nikt nigdy by się nie dowiedział, że kanał leży.
 Łapię wyjątek po to, żeby nie kłamać klientowi, a loguję go po to, żeby nie okłamywać samego
 siebie, więc awaria kanału zostaje widoczna na poziomie `error` razem z odbiorcą i wyjątkiem.
+
+
+
+
+
+## Problem 2. Kontroler odpowiada 500 na każdy błąd i sam odpytuje bazę
+
+### Przyczyna
+
+W `approve()` cały `dispatch()` był owinięty w `catch (\Throwable)`, który każdy wyjątek zamieniał
+na 500 z `$e->getMessage()` w treści. Kontroler nie mógłby rozróżnić błędów nawet gdyby chciał, bo
+handler rzucał ten sam `\RuntimeException` zarówno dla nieistniejącego dokumentu, jak i dla
+dokumentu w złym statusie. Do tego po zatwierdzeniu kontroler czytał wynik surowym `SELECT` przez
+`getConnection()`, mimo że `SalesDocumentRepository` z metodą `find()` już istniał.
+
+### Skutek
+
+Klient dostawał 500 tam, gdzie sam podał zły identyfikator, i nie miał jak odróżnić własnej
+pomyłki od awarii serwera. W treści odpowiedzi wychodziła na zewnątrz pełna nazwa klasy komendy
+razem z wewnętrznym komunikatem, czyli szczegóły implementacji, na których klient i tak nie może
+polegać, bo zmieniają się przy każdej refaktoryzacji. Surowy SQL w kontrolerze wiązał warstwę HTTP
+z nazwami tabeli i kolumn, więc zmiana schematu psułaby kontroler.
+
+### Jak należało to rozwiązać
+
+Różne sytuacje muszą być różnymi typami wyjątków, bo tylko typ da się bezpiecznie sprawdzić.
+Rozróżnianie po treści komunikatu nie wchodzi w grę, bo komunikat nie jest kontraktem. Kontroler
+ma wysłać komendę i odczytać wynik przez repozytorium, a tłumaczenie błędów domenowych na kody HTTP
+ma być w jednym miejscu dla wszystkich endpointów, a nie kopiowane do każdej akcji.
+
+### Jak zostało rozwiązane
+
+Powstały wyjątki domenowe w `src/Exception/`. `SalesDocumentNotFound` odpowiada za brak dokumentu,
+`SalesDocumentStatusConflict` za operację niedozwoloną w bieżącym statusie, obie dziedziczą po
+abstrakcyjnym `SalesDocumentException`, który wymaga metody `errorCode()`. Bazą jest
+`\RuntimeException`, bo test dla `RejectSalesDocument` oczekuje właśnie tego typu, a podklasa ten
+warunek spełnia. Handler rzuca teraz te wyjątki zamiast gołego `\RuntimeException`.
+
+Tłumaczenie na HTTP robi `DomainExceptionSubscriber` nasłuchujący na `kernel.exception`. Najpierw
+rozpakowuje `HandlerFailedException`, w który Messenger owija każdy wyjątek z handlera, bo bez tego
+`instanceof` nigdy by nie zadziałał. Potem sprawdza czy w środku jest `SalesDocumentException` i
+jeśli tak, ustawia odpowiedź JSON z polem `error` zawierającym stały kod dla klienta i polem
+`message` z tekstem napisanym przez nas. Każdy inny wyjątek przepuszcza dalej, więc nieoczekiwany
+błąd nadal kończy się jako 500, bo tym właśnie jest.
+
+Wybrałem subskrybenta zamiast `try/catch` w kontrolerze, bo tłumaczenie błędów jest potrzebne
+każdemu endpointowi, który wysyła komendę, i nie chciałem powielać go w każdej akcji razem z
+rozpakowywaniem `HandlerFailedException`. Zadanie mówi, że kontroler ma mapować błędy, a
+jednocześnie daje swobodę w organizacji plików, więc mapowanie zostało w warstwie HTTP, tylko w
+osobnym pliku. Sam kontroler wysyła komendę, czyta wynik przez `find()` z repozytorium i zwraca
+odpowiedź, bez `try`, bez SQL i bez wiedzy o kodach błędów.
+
+Dla braku dokumentu wybrałem 404, a dla złego statusu 409, a nie 422. Kod 422 oznacza żądanie
+poprawne składniowo, ale bezsensowne semantycznie, na przykład ujemny identyfikator. Tutaj
+żądanie jest w porządku, tylko zasób zdążył zmienić stan, a to jest właśnie konflikt.
+
+Test `testApprovingMissingDocumentCurrentlyReturns500` zmienił nazwę na
+`testApprovingMissingDocumentReturns404` i sprawdza status oraz kod `error`. Dopisałem też
+`testApprovingAnAlreadyApprovedDocumentReturns409`, bo bez niego druga połowa wymagania nie miałaby
+żadnego dowodu.
+
+Kontroler nadal woła repozytorium bezpośrednio, bo zadanie o to prosi. Gdybym miał wolną rękę,
+wstawiłbym między nie serwis odczytowy i tylko on znałby warstwę trwałości, a kontroler zajmowałby
+się wyłącznie przyjęciem żądania i zwróceniem odpowiedzi.
+
+
+
 
 ## Spostrzeżenia poza zakresem zadania
 
